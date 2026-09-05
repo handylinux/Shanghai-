@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
+"""Генерация data.js из places_final.json.
+
+Скрипт вспомогательный: data.js можно править руками, сборка приложению не нужна.
+Координаты в data.js — WGS-84 (GPS/OpenStreetMap); пересчётом в GCJ-02/BD-09
+для ссылок на карты занимается geo.js.
+"""
 import json
+import os
 
 P = json.load(open("/home/user/places_final.json", encoding="utf-8"))
 
@@ -115,7 +122,9 @@ payload = {
 
 js = "/* Автогенерировано из places_final.json — можно править вручную (DeepSeek). */\n"
 js += "window.SH_DATA = " + json.dumps(payload, ensure_ascii=False, indent=2) + ";\n"
-open("/home/user/shanghai-app/data.js", "w", encoding="utf-8").write(js)
+HERE = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(HERE, "data.js"), "w", encoding="utf-8") as f:
+    f.write(js)
 
 # quick sanity
 missing = [p["id"] for p in P if p["id"] not in M]
