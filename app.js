@@ -21,14 +21,27 @@
   // ---- утилиты ----
   const $ = s => document.querySelector(s);
   const esc = s => String(s||"").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  // geo.js: пересчёт WGS-84 -> GCJ-02/BD-09 и построение ссылок на карты.
+  const G = window.SH_GEO;
   const distKm = (a,b) => {
+    if(G) return G.haversineKm(a.lat,a.lon,b.lat,b.lon);
     const R=6371, dLat=(b.lat-a.lat)*Math.PI/180, dLon=(b.lon-a.lon)*Math.PI/180;
     const la=a.lat*Math.PI/180, lb=b.lat*Math.PI/180;
     const h=Math.sin(dLat/2)**2 + Math.cos(la)*Math.cos(lb)*Math.sin(dLon/2)**2;
     return 2*R*Math.asin(Math.sqrt(h));
   };
-  const osmLink = l => `https://www.openstreetmap.org/?mlat=${l.lat}&mlon=${l.lon}#map=17/${l.lat}/${l.lon}`;
-  const gmapLink = l => `https://maps.google.com/?q=${l.lat},${l.lon}`;
+  // В Китае Google Maps / 高德 / 百度 рисуют карту в GCJ-02 (и BD-09), а не в WGS-84.
+  // Если скормить им «честную» GPS-координату, маркер уедет на ~500 м — этим и
+  // занимается geo.js. OpenStreetMap и наша Leaflet-карта получают WGS-84 как есть.
+  const osmLink      = l => G ? G.osmLink(l)
+      : `https://www.openstreetmap.org/?mlat=${l.lat}&mlon=${l.lon}#map=18/${l.lat}/${l.lon}`;
+  const gmapLink     = l => G ? G.googleLink(l)
+      : `https://www.google.com/maps/search/?api=1&query=${l.lat},${l.lon}`;
+  const gmapDirLink  = l => G ? G.googleDirLink(l) : gmapLink(l);
+  const gmapNameLink = l => G ? G.googleNameLink(l) : gmapLink(l);
+  const amapLink     = l => G ? G.amapLink(l) : "";
+  const baiduLink    = l => G ? G.baiduLink(l) : "";
+  const coordText    = l => `${Number(l.lat).toFixed(6)}, ${Number(l.lon).toFixed(6)}`;
   const near = l => D.locations
       .filter(x => x.id !== l.id)
       .map(x => ({x, d: distKm(l,x)}))
@@ -80,9 +93,24 @@
       </div>
       <div class="actions">
         <button class="btn" onclick="toggleDoneById('${l.id}')">${isDone(l.id)?'↩ Отменить «посетил»':'✓ Отметить «посетил»'}</button>
-        <a class="btn ghost" href="${osmLink(l)}" target="_blank" rel="noopener">Открыть в OSM ↗</a>
-        <a class="btn ghost sm" href="${gmapLink(l)}" target="_blank" rel="noopener">Google Maps ↗</a>
+        <a class="btn" href="${gmapLink(l)}" target="_blank" rel="noopener">Google Maps ↗</a>
       </div>
+      <div class="actions">
+        <a class="btn ghost sm" href="${osmLink(l)}" target="_blank" rel="noopener">OSM ↗</a>
+        ${amapLink(l) ? `<a class="btn ghost sm" href="${amapLink(l)}" target="_blank" rel="noopener">高德 ↗</a>` : ''}
+        ${baiduLink(l) ? `<a class="btn ghost sm" href="${baiduLink(l)}" target="_blank" rel="noopener">百度 ↗</a>` : ''}
+        <a class="btn ghost sm" href="${gmapDirLink(l)}" target="_blank" rel="noopener">🧭 Маршрут</a>
+        <a class="btn ghost sm" href="${gmapNameLink(l)}" target="_blank" rel="noopener">🔎 Google по 汉字</a>
+        <button class="btn ghost sm" onclick="focusOnMap('${l.id}')">🗺️ На нашей карте</button>
+      </div>
+      <div class="kv">
+        <div class="k">Координаты WGS-84 (GPS)</div>
+        <div class="v">
+          <button class="copy" onclick="copyText(this)" data-copy="${coordText(l)}" title="Скопировать">${coordText(l)}</button>
+          ${l.approx ? '<span class="warnchip">≈ приблизительные</span>' : ''}
+        </div>
+      </div>
+      <div class="hint">Google Maps, 高德 и 百度 в Китае работают в системе координат GCJ-02 — в ссылках выше координаты уже пересчитаны, поэтому маркер встанет на место. OSM и GPS-навигаторы понимают WGS-84 — это значение можно копировать.</div>
       ${n.length?`<div class="near"><h4>Что рядом (≤2.5 км)</h4>
         ${n.map(o=>`<div class="item" onclick="openById('${o.x.id}')">
           <span class="em">${o.x.emoji||'📍'}</span>
@@ -95,6 +123,33 @@
   window.closeSheet = () => $("#overlay").classList.remove("on");
   window.openById = id => openSheet(byId[id]);
   window.toggleDoneById = id => { toggleDone(id); openSheet(byId[id]); };
+
+  // копирование координат в буфер (для вставки в любой навигатор)
+  window.copyText = btn => {
+    const txt = btn.dataset.copy || btn.textContent;
+    const ok = () => { const t = btn.textContent; btn.textContent = "✓ скопировано"; btn.classList.add("done");
+      setTimeout(()=>{ btn.textContent = t; btn.classList.remove("done"); }, 1200); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(ok).catch(()=>fallback());
+    } else fallback();
+    function fallback(){
+      const ta = document.createElement("textarea");
+      ta.value = txt; ta.style.position="fixed"; ta.style.opacity="0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); ok(); } catch(e){}
+      document.body.removeChild(ta);
+    }
+  };
+
+  // показать точку на встроенной карте
+  window.focusOnMap = id => {
+    closeSheet();
+    showView("map");
+    const m = markers[id];
+    if(mapObj && m){
+      setTimeout(() => { mapObj.setView(m.getLatLng(), 17); m.openPopup(); }, 250);
+    }
+  };
 
   // делегирование кликов по карточкам
   document.addEventListener("click", e => {
@@ -170,6 +225,7 @@
   }
 
   let mapObj = null, mapBuilt = false;
+  const markers = {};
   function renderMap(){
     if(!mapBuilt){
       $("#view-map").innerHTML = `<h2 class="sec">🗺️ Карта</h2><div id="map"></div>
@@ -180,7 +236,14 @@
       D.locations.forEach(l=>{
         if(l.lat && l.lon){
           const m = L.marker([l.lat,l.lon]).addTo(mapObj);
-          m.bindPopup(`<b>${esc(l.name)}</b><br>${esc(l.addr)}<br><a href="${osmLink(l)}" target="_blank" rel="noopener">Открыть в OSM</a>`);
+          m.bindTooltip(`${l.emoji||'📍'} ${esc(l.name)}`, {direction:"top", offset:[0,-30]});
+          m.bindPopup(`<b>${esc(l.name)}</b><br>${esc(l.addr)}
+            <div class="mt8">
+              <a href="${gmapLink(l)}" target="_blank" rel="noopener">Google Maps</a> ·
+              <a href="${osmLink(l)}" target="_blank" rel="noopener">OSM</a>
+              ${amapLink(l) ? ` · <a href="${amapLink(l)}" target="_blank" rel="noopener">高德</a>` : ''}
+            </div>`);
+          markers[l.id] = m;
         }
       });
       mapBuilt = true;
