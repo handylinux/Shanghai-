@@ -39,6 +39,7 @@
       : `https://www.google.com/maps/search/?api=1&query=${l.lat},${l.lon}`;
   const gmapDirLink  = l => G ? G.googleDirLink(l) : gmapLink(l);
   const gmapNameLink = l => G ? G.googleNameLink(l) : gmapLink(l);
+  const osmDirLink   = l => G ? G.osmDirLink(l) : osmLink(l);
   const amapLink     = l => G ? G.amapLink(l) : "";
   const baiduLink    = l => G ? G.baiduLink(l) : "";
   const coordText    = l => `${Number(l.lat).toFixed(6)}, ${Number(l.lon).toFixed(6)}`;
@@ -92,14 +93,15 @@
         ${l.short ? `<div class="k">Что это</div><div class="v">${esc(l.short)}</div>`:''}
       </div>
       <div class="actions">
-        <button class="btn" onclick="toggleDoneById('${l.id}')">${isDone(l.id)?'↩ Отменить «посетил»':'✓ Отметить «посетил»'}</button>
-        <a class="btn" href="${gmapLink(l)}" target="_blank" rel="noopener">Google Maps ↗</a>
+        <a class="btn" href="${gmapDirLink(l)}" target="_blank" rel="noopener">🧭 Маршрут — как дойти</a>
+        <button class="btn" onclick="routeToOnMap('${l.id}')">🚶 Построить маршрут (GPS)</button>
       </div>
       <div class="actions">
-        <a class="btn ghost sm" href="${osmLink(l)}" target="_blank" rel="noopener">OSM ↗</a>
+        <button class="btn ghost" onclick="toggleDoneById('${l.id}')">${isDone(l.id)?'↩ Отменить «посетил»':'✓ Отметить «посетил»'}</button>
+        <a class="btn ghost sm" href="${gmapLink(l)}" target="_blank" rel="noopener">Google Maps ↗</a>
+        <a class="btn ghost sm" href="${osmLink(l)}" target="_blank" rel="noopener">OSM (запасная) ↗</a>
         ${amapLink(l) ? `<a class="btn ghost sm" href="${amapLink(l)}" target="_blank" rel="noopener">高德 ↗</a>` : ''}
         ${baiduLink(l) ? `<a class="btn ghost sm" href="${baiduLink(l)}" target="_blank" rel="noopener">百度 ↗</a>` : ''}
-        <a class="btn ghost sm" href="${gmapDirLink(l)}" target="_blank" rel="noopener">🧭 Маршрут</a>
         <a class="btn ghost sm" href="${gmapNameLink(l)}" target="_blank" rel="noopener">🔎 Google по 汉字</a>
         <button class="btn ghost sm" onclick="focusOnMap('${l.id}')">🗺️ На нашей карте</button>
       </div>
@@ -226,10 +228,78 @@
 
   let mapObj = null, mapBuilt = false;
   const markers = {};
+  let userMarker = null, routeLine = null;
+
+  // 📍 «Я здесь» — показать свою позицию на карте.
+  function locateMe(){
+    if(!mapObj) return;
+    if(!navigator.geolocation){ alert("Геолокация не поддерживается браузером."); return; }
+    navigator.geolocation.getCurrentPosition(p => {
+      const ll = [p.coords.latitude, p.coords.longitude];
+      if(userMarker) userMarker.setLatLng(ll);
+      else userMarker = L.circleMarker(ll, {radius:9, color:"#1d4ed8", fillColor:"#3b82f6", fillOpacity:.85})
+        .addTo(mapObj).bindPopup("📍 Вы здесь");
+      mapObj.setView(ll, 15);
+      userMarker.openPopup();
+    }, err => {
+      alert("Не удалось получить GPS-позицию: " + err.message + "\nРазрешите доступ к геолокации в браузере.");
+    }, {enableHighAccuracy:true, timeout:12000});
+  }
+  window.locateMe = locateMe;
+
+  // 🚶 Построить пеший маршрут «от меня» до точки прямо на карте (OSRM foot).
+  // Если роутер недоступен — открываем Google Maps, он строит маршрут по GPS.
+  function buildRoute(id){
+    const l = byId[id];
+    if(!l) return;
+    showView("map");
+    if(!mapObj){ setTimeout(()=>buildRoute(id), 300); return; }
+    if(!navigator.geolocation){
+      window.open(gmapDirLink(l), "_blank");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(async p => {
+      const from = [p.coords.latitude, p.coords.longitude];
+      if(userMarker) userMarker.setLatLng(from);
+      else userMarker = L.circleMarker(from, {radius:9, color:"#1d4ed8", fillColor:"#3b82f6", fillOpacity:.85})
+        .addTo(mapObj).bindPopup("📍 Вы здесь");
+      try{
+        const url = `https://router.project-osrm.org/route/v1/foot/${from[1]},${from[0]};${l.lon},${l.lat}?overview=full&geometries=geojson`;
+        const r = await fetch(url);
+        const j = await r.json();
+        if(!j.routes || !j.routes[0]) throw new Error("нет маршрута");
+        const route = j.routes[0];
+        const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+        if(routeLine) mapObj.removeLayer(routeLine);
+        routeLine = L.polyline(coords, {color:"#2563eb", weight:6, opacity:.85}).addTo(mapObj);
+        mapObj.fitBounds(L.latLngBounds([from, [l.lat, l.lon]]).pad(0.35));
+        const km = (route.distance/1000).toFixed(1), min = Math.round(route.duration/60);
+        routeLine.bindPopup(`<b>${esc(l.name)}</b><br>🚶 ${km} км · ~${min} мин пешком`).openPopup();
+      }catch(e){
+        alert("Маршрут на карте не построился (нет доступа к роутеру). Открываю Google Maps — там маршрут построится по GPS.");
+        window.open(gmapDirLink(l), "_blank");
+      }
+    }, err => {
+      alert("Нужен доступ к GPS. Разрешите геолокацию — или откройте маршрут в Google Maps.");
+      window.open(gmapDirLink(l), "_blank");
+    }, {enableHighAccuracy:true, timeout:12000});
+  }
+  window.buildRoute = buildRoute;
+  function routeToOnMap(id){
+    closeSheet();
+    setTimeout(()=>buildRoute(id), 250);
+  }
+  window.routeToOnMap = routeToOnMap;
+
   function renderMap(){
     if(!mapBuilt){
-      $("#view-map").innerHTML = `<h2 class="sec">🗺️ Карта</h2><div id="map"></div>
-        <div class="note">Карта требует интернет. Офлайн — используйте «Открыть в OSM» из карточки места.</div>`;
+      $("#view-map").innerHTML = `<h2 class="sec">🗺️ Карта</h2>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px">
+          <button class="btn" onclick="locateMe()">📍 Я здесь (GPS)</button>
+          <span class="muted" style="font-size:12px; align-self:center">Маршрут: откройте точку → «Построить маршрут (GPS)»</span>
+        </div>
+        <div id="map"></div>
+        <div class="note">Google Maps — основная карта (в карточке кнопка «Маршрут — как дойти» строит путь пешком от GPS). OSM — запасная. Офлайн — копируйте координаты (WGS-84) из карточки.</div>`;
       if(typeof L === "undefined"){ $("#map").innerHTML = "<p class='muted'>Leaflet не загрузился (нет сети).</p>"; return; }
       mapObj = L.map("map").setView([31.23,121.47],12);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:18, attribution:"© OpenStreetMap"}).addTo(mapObj);
@@ -239,8 +309,10 @@
           m.bindTooltip(`${l.emoji||'📍'} ${esc(l.name)}`, {direction:"top", offset:[0,-30]});
           m.bindPopup(`<b>${esc(l.name)}</b><br>${esc(l.addr)}
             <div class="mt8">
+              <a href="${gmapDirLink(l)}" target="_blank" rel="noopener">🧭 Маршрут</a> ·
+              <a href="#" onclick="buildRoute('${l.id}'); return false">🚶 Тут (GPS)</a> ·
               <a href="${gmapLink(l)}" target="_blank" rel="noopener">Google Maps</a> ·
-              <a href="${osmLink(l)}" target="_blank" rel="noopener">OSM</a>
+              <a href="${osmLink(l)}" target="_blank" rel="noopener">OSM (запасная)</a>
               ${amapLink(l) ? ` · <a href="${amapLink(l)}" target="_blank" rel="noopener">高德</a>` : ''}
             </div>`);
           markers[l.id] = m;
