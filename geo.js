@@ -138,12 +138,22 @@
     );
   }
 
-  // Маршрут «откуда я» → точка (GCJ-02).
+  // Маршрут «откуда я» → точка (GCJ-02). Без origin Google берёт текущую
+  // позицию по GPS; travelmode=walking — «как идти» пешком.
   function googleDirLink(l) {
     var g = wgs84ToGcj02(l.lat, l.lon);
     return (
       "https://www.google.com/maps/dir/?api=1&destination=" +
-      encodeURIComponent(n6(g.lat) + "," + n6(g.lon))
+      encodeURIComponent(n6(g.lat) + "," + n6(g.lon)) +
+      "&travelmode=walking"
+    );
+  }
+
+  // OSM — запасной вариант: пеший маршрут (пустая точка старта = «моя позиция»).
+  function osmDirLink(l) {
+    return (
+      "https://www.openstreetmap.org/directions?engine=fossgis_osrm_foot&route=;" +
+      l.lat + "," + l.lon
     );
   }
 
@@ -177,6 +187,7 @@
     haversineKm: haversineKm,
     label: label,
     osmLink: osmLink,
+    osmDirLink: osmDirLink,
     googleLink: googleLink,
     googleNameLink: googleNameLink,
     googleDirLink: googleDirLink,
