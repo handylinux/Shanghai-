@@ -1,5 +1,5 @@
 /* Service worker: кэширует оболочку приложения для офлайна */
-const CACHE = "shanghai-nav-v5";
+const CACHE = "shanghai-nav-v6";
 const ASSETS = [
   "./",
   "./index.html",
